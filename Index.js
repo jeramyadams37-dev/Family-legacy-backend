@@ -1,66 +1,129 @@
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
+const bcrypt = require('bcrypt');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 app.use(cors());
 app.use(express.json());
 
 // Database connection
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_pGAUB9oIq4SF@ep-calm-sound-a8j0n5yd-pooler.eastus2.azure.neon.tech/neondb?sslmode=require',
+  connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// Initialize database
+// Initialize database with Project Harmony schema
 const initDB = async () => {
   try {
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS families (
-        id SERIAL PRIMARY KEY,
-        family_code VARCHAR(50) UNIQUE NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      -- Table 1: User
+      CREATE TABLE IF NOT EXISTS "User" (
+          "UserID" SERIAL PRIMARY KEY,
+          "Name" VARCHAR(255) NOT NULL,
+          "Email" VARCHAR(255) UNIQUE NOT NULL,
+          "Password_Hash" VARCHAR(255) NOT NULL,  
+          "Role" VARCHAR(50) NOT NULL DEFAULT 'Member', 
+          "Status" VARCHAR(50) NOT NULL DEFAULT 'Pending', 
+          "Moderator_Expiry_Date" TIMESTAMPTZ, 
+          "Legacy_Appointee_UserID" INT REFERENCES "User"("UserID") 
       );
-      CREATE TABLE IF NOT EXISTS family_members (
-        id SERIAL PRIMARY KEY,
-        family_code VARCHAR(50) REFERENCES families(family_code) ON DELETE CASCADE,
-        name VARCHAR(255) NOT NULL,
-        role VARCHAR(50) NOT NULL,
-        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+      -- Table 2: Invite
+      CREATE TABLE IF NOT EXISTS "Invite" (
+          "InviteID" SERIAL PRIMARY KEY,
+          "InvitedBy_UserID" INT NOT NULL REFERENCES "User"("UserID"),
+          "Invitee_Email" VARCHAR(255) NOT NULL,
+          "Status" VARCHAR(50) NOT NULL, 
+          "Denial_Reason" TEXT,
+          "Created_At" TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
-      CREATE TABLE IF NOT EXISTS tree_members (
-        id SERIAL PRIMARY KEY,
-        family_code VARCHAR(50) REFERENCES families(family_code) ON DELETE CASCADE,
-        name VARCHAR(255) NOT NULL,
-        relationship VARCHAR(255),
-        birth_date DATE,
-        bio TEXT,
-        created_by VARCHAR(255),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+      -- Table 3: Group
+      CREATE TABLE IF NOT EXISTS "Group" (
+          "GroupID" SERIAL PRIMARY KEY,
+          "GroupName" VARCHAR(255) NOT NULL,
+          "GroupType" VARCHAR(50) NOT NULL DEFAULT 'Secret', 
+          "CreatedBy_UserID" INT NOT NULL REFERENCES "User"("UserID")
       );
-      CREATE TABLE IF NOT EXISTS stories (
-        id SERIAL PRIMARY KEY,
-        family_code VARCHAR(50) REFERENCES families(family_code) ON DELETE CASCADE,
-        title VARCHAR(255) NOT NULL,
-        author VARCHAR(255),
-        content TEXT NOT NULL,
-        tags TEXT,
-        created_by VARCHAR(255),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+      -- Table 4: Group_Member
+      CREATE TABLE IF NOT EXISTS "Group_Member" (
+          "GroupID" INT NOT NULL REFERENCES "Group"("GroupID") ON DELETE CASCADE,
+          "UserID" INT NOT NULL REFERENCES "User"("UserID") ON DELETE CASCADE,
+          PRIMARY KEY ("GroupID", "UserID") 
       );
-      CREATE TABLE IF NOT EXISTS events (
-        id SERIAL PRIMARY KEY,
-        family_code VARCHAR(50) REFERENCES families(family_code) ON DELETE CASCADE,
-        name VARCHAR(255) NOT NULL,
-        date DATE NOT NULL,
-        location VARCHAR(255),
-        description TEXT,
-        created_by VARCHAR(255),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+      -- Table 5: Person (The Family Tree)
+      CREATE TABLE IF NOT EXISTS "Person" (
+          "PersonID" SERIAL PRIMARY KEY,
+          "Name" VARCHAR(255) NOT NULL,
+          "BirthDate" DATE,
+          "DeathDate" DATE, 
+          "Biography" TEXT, 
+          "Profile_UserID" INT REFERENCES "User"("UserID") 
+      );
+
+      -- Table 6: Relationship (The Family Tree Logic)
+      CREATE TABLE IF NOT EXISTS "Relationship" (
+          "RelationshipID" SERIAL PRIMARY KEY,
+          "Person1_ID" INT NOT NULL REFERENCES "Person"("PersonID"),
+          "Person2_ID" INT NOT NULL REFERENCES "Person"("PersonID"),
+          "RelationshipType" VARCHAR(50) NOT NULL 
+      );
+
+      -- Table 7: Media_Album
+      CREATE TABLE IF NOT EXISTS "Media_Album" (
+          "AlbumID" SERIAL PRIMARY KEY,
+          "AlbumName" VARCHAR(255) NOT NULL,
+          "Description" TEXT,
+          "CreatedBy_UserID" INT NOT NULL REFERENCES "User"("UserID")
+      );
+
+      -- Table 8: Media_Item
+      CREATE TABLE IF NOT EXISTS "Media_Item" (
+          "ItemID" SERIAL PRIMARY KEY,
+          "AlbumID" INT NOT NULL REFERENCES "Media_Album"("AlbumID") ON DELETE CASCADE,
+          "UploadedBy_UserID" INT NOT NULL REFERENCES "User"("UserID"),
+          "File_URL" VARCHAR(500) NOT NULL,
+          "Description_Caption" TEXT,
+          "Date_Taken" DATE,
+          "Post_Status" VARCHAR(50) NOT NULL DEFAULT 'Visible' 
+      );
+
+      -- Table 9: Timeline_Event
+      CREATE TABLE IF NOT EXISTS "Timeline_Event" (
+          "EventID" SERIAL PRIMARY KEY,
+          "EventDate" DATE NOT NULL,
+          "Title" VARCHAR(255) NOT NULL,
+          "Story" TEXT,
+          "CreatedBy_UserID" INT NOT NULL REFERENCES "User"("UserID"),
+          "Post_Status" VARCHAR(50) NOT NULL DEFAULT 'Visible' 
+      );
+
+      -- Table 10: Direct_Message
+      CREATE TABLE IF NOT EXISTS "Direct_Message" (
+          "MessageID" SERIAL PRIMARY KEY,
+          "Sender_UserID" INT NOT NULL REFERENCES "User"("UserID"),
+          "Recipient_UserID" INT NOT NULL REFERENCES "User"("UserID"),
+          "Message_Content" TEXT NOT NULL,
+          "Timestamp" TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+          "Message_Status" VARCHAR(50) NOT NULL DEFAULT 'Sent' 
+      );
+
+      -- Table 11: Memorial_Tribute
+      CREATE TABLE IF NOT EXISTS "Memorial_Tribute" (
+          "TributeID" SERIAL PRIMARY KEY,
+          "Deceased_PersonID" INT NOT NULL REFERENCES "Person"("PersonID") ON DELETE CASCADE,
+          "PostedBy_UserID" INT NOT NULL REFERENCES "User"("UserID"),
+          "Tribute_Content" TEXT NOT NULL,
+          "Timestamp" TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+          "Post_Status" VARCHAR(50) NOT NULL DEFAULT 'Visible' 
       );
     `);
-    console.log('✅ Database initialized successfully');
+    console.log('✅ Database initialized successfully with Project Harmony schema');
   } catch (error) {
     console.error('❌ Database initialization error:', error);
   }
@@ -68,230 +131,251 @@ const initDB = async () => {
 
 initDB();
 
-// Health check endpoint
+// ============ HEALTH CHECK ============
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Family Legacy API is running' });
+  res.json({ status: 'ok', message: 'Project Harmony API is running' });
 });
 
-// Create family
-app.post('/api/families', async (req, res) => {
-  const { familyCode, userName } = req.body;
+// ============ USER ENDPOINTS ============
+// Register new user
+app.post('/api/users/register', async (req, res) => {
+  const { name, email, password } = req.body;
   try {
-    await pool.query('BEGIN');
-    await pool.query('INSERT INTO families (family_code) VALUES ($1)', [familyCode]);
-    await pool.query('INSERT INTO family_members (family_code, name, role) VALUES ($1, $2, $3)', [familyCode, userName, 'admin']);
-    await pool.query('COMMIT');
-    res.json({ success: true, familyCode });
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const result = await pool.query(
+      'INSERT INTO "User" ("Name", "Email", "Password_Hash") VALUES ($1, $2, $3) RETURNING "UserID", "Name", "Email", "Role", "Status"',
+      [name, email, hashedPassword]
+    );
+    res.json(result.rows[0]);
   } catch (error) {
-    await pool.query('ROLLBACK');
-    console.error('Error creating family:', error);
-    res.status(500).json({ error: 'Failed to create family' });
+    console.error('Error registering user:', error);
+    res.status(500).json({ error: 'Failed to register user' });
   }
 });
 
-// Join family
-app.post('/api/families/join', async (req, res) => {
-  const { familyCode, userName } = req.body;
+// Get all users
+app.get('/api/users', async (req, res) => {
   try {
-    const check = await pool.query('SELECT * FROM families WHERE family_code = $1', [familyCode]);
-    if (check.rows.length === 0) {
-      return res.status(404).json({ error: 'Family not found' });
-    }
-    await pool.query('INSERT INTO family_members (family_code, name, role) VALUES ($1, $2, $3)', [familyCode, userName, 'member']);
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error joining family:', error);
-    res.status(500).json({ error: 'Failed to join family' });
-  }
-});
-
-// Get family members
-app.get('/api/families/:familyCode/members', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM family_members WHERE family_code = $1 ORDER BY joined_at DESC', [req.params.familyCode]);
+    const result = await pool.query('SELECT "UserID", "Name", "Email", "Role", "Status" FROM "User"');
     res.json(result.rows);
   } catch (error) {
-    console.error('Error fetching members:', error);
-    res.status(500).json({ error: 'Failed to fetch members' });
+    console.error('Error fetching users:', error);
+    res.status(500).json({ error: 'Failed to fetch users' });
   }
 });
 
-// Get tree members
-app.get('/api/families/:familyCode/tree', async (req, res) => {
+// ============ PERSON (FAMILY TREE) ENDPOINTS ============
+// Get all people
+app.get('/api/people', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM tree_members WHERE family_code = $1 ORDER BY created_at DESC', [req.params.familyCode]);
+    const result = await pool.query('SELECT * FROM "Person" ORDER BY "Name"');
     res.json(result.rows);
   } catch (error) {
-    console.error('Error fetching tree:', error);
-    res.status(500).json({ error: 'Failed to fetch tree' });
+    console.error('Error fetching people:', error);
+    res.status(500).json({ error: 'Failed to fetch people' });
   }
 });
 
-// Add tree member
-app.post('/api/families/:familyCode/tree', async (req, res) => {
-  const { name, relationship, birthDate, bio, createdBy } = req.body;
+// Add person
+app.post('/api/people', async (req, res) => {
+  const { name, birthDate, deathDate, biography, profileUserId } = req.body;
   try {
     const result = await pool.query(
-      'INSERT INTO tree_members (family_code, name, relationship, birth_date, bio, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [req.params.familyCode, name, relationship, birthDate, bio, createdBy]
+      'INSERT INTO "Person" ("Name", "BirthDate", "DeathDate", "Biography", "Profile_UserID") VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [name, birthDate, deathDate, biography, profileUserId]
     );
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Error adding tree member:', error);
-    res.status(500).json({ error: 'Failed to add tree member' });
+    console.error('Error adding person:', error);
+    res.status(500).json({ error: 'Failed to add person' });
   }
 });
 
-// Update tree member
-app.put('/api/families/:familyCode/tree/:id', async (req, res) => {
-  const { name, relationship, birthDate, bio } = req.body;
+// Update person
+app.put('/api/people/:id', async (req, res) => {
+  const { name, birthDate, deathDate, biography } = req.body;
   try {
     const result = await pool.query(
-      'UPDATE tree_members SET name = $1, relationship = $2, birth_date = $3, bio = $4 WHERE id = $5 RETURNING *',
-      [name, relationship, birthDate, bio, req.params.id]
+      'UPDATE "Person" SET "Name" = $1, "BirthDate" = $2, "DeathDate" = $3, "Biography" = $4 WHERE "PersonID" = $5 RETURNING *',
+      [name, birthDate, deathDate, biography, req.params.id]
     );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Tree member not found' });
-    }
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Error updating tree member:', error);
-    res.status(500).json({ error: 'Failed to update' });
+    console.error('Error updating person:', error);
+    res.status(500).json({ error: 'Failed to update person' });
   }
 });
 
-// Delete tree member
-app.delete('/api/families/:familyCode/tree/:id', async (req, res) => {
+// ============ RELATIONSHIP ENDPOINTS ============
+// Get all relationships
+app.get('/api/relationships', async (req, res) => {
   try {
-    const result = await pool.query('DELETE FROM tree_members WHERE id = $1 RETURNING *', [req.params.id]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Tree member not found' });
-    }
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error deleting tree member:', error);
-    res.status(500).json({ error: 'Failed to delete' });
-  }
-});
-
-// Get stories
-app.get('/api/families/:familyCode/stories', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM stories WHERE family_code = $1 ORDER BY created_at DESC', [req.params.familyCode]);
+    const result = await pool.query('SELECT * FROM "Relationship"');
     res.json(result.rows);
   } catch (error) {
-    console.error('Error fetching stories:', error);
-    res.status(500).json({ error: 'Failed to fetch stories' });
+    console.error('Error fetching relationships:', error);
+    res.status(500).json({ error: 'Failed to fetch relationships' });
   }
 });
 
-// Add story
-app.post('/api/families/:familyCode/stories', async (req, res) => {
-  const { title, author, content, tags, createdBy } = req.body;
+// Add relationship
+app.post('/api/relationships', async (req, res) => {
+  const { person1Id, person2Id, relationshipType } = req.body;
   try {
     const result = await pool.query(
-      'INSERT INTO stories (family_code, title, author, content, tags, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [req.params.familyCode, title, author, content, tags, createdBy]
+      'INSERT INTO "Relationship" ("Person1_ID", "Person2_ID", "RelationshipType") VALUES ($1, $2, $3) RETURNING *',
+      [person1Id, person2Id, relationshipType]
     );
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Error adding story:', error);
-    res.status(500).json({ error: 'Failed to add story' });
+    console.error('Error adding relationship:', error);
+    res.status(500).json({ error: 'Failed to add relationship' });
   }
 });
 
-// Update story
-app.put('/api/families/:familyCode/stories/:id', async (req, res) => {
-  const { title, author, content, tags } = req.body;
+// ============ TIMELINE EVENT ENDPOINTS ============
+// Get all timeline events
+app.get('/api/timeline', async (req, res) => {
   try {
-    const result = await pool.query(
-      'UPDATE stories SET title = $1, author = $2, content = $3, tags = $4 WHERE id = $5 RETURNING *',
-      [title, author, content, tags, req.params.id]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Story not found' });
-    }
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Error updating story:', error);
-    res.status(500).json({ error: 'Failed to update story' });
-  }
-});
-
-// Delete story
-app.delete('/api/families/:familyCode/stories/:id', async (req, res) => {
-  try {
-    const result = await pool.query('DELETE FROM stories WHERE id = $1 RETURNING *', [req.params.id]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Story not found' });
-    }
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error deleting story:', error);
-    res.status(500).json({ error: 'Failed to delete' });
-  }
-});
-
-// Get events
-app.get('/api/families/:familyCode/events', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM events WHERE family_code = $1 ORDER BY date ASC', [req.params.familyCode]);
+    const result = await pool.query('SELECT * FROM "Timeline_Event" WHERE "Post_Status" = $1 ORDER BY "EventDate" DESC', ['Visible']);
     res.json(result.rows);
   } catch (error) {
-    console.error('Error fetching events:', error);
-    res.status(500).json({ error: 'Failed to fetch events' });
+    console.error('Error fetching timeline:', error);
+    res.status(500).json({ error: 'Failed to fetch timeline' });
   }
 });
 
-// Add event
-app.post('/api/families/:familyCode/events', async (req, res) => {
-  const { name, date, location, description, createdBy } = req.body;
+// Add timeline event
+app.post('/api/timeline', async (req, res) => {
+  const { eventDate, title, story, createdByUserId } = req.body;
   try {
     const result = await pool.query(
-      'INSERT INTO events (family_code, name, date, location, description, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [req.params.familyCode, name, date, location, description, createdBy]
+      'INSERT INTO "Timeline_Event" ("EventDate", "Title", "Story", "CreatedBy_UserID") VALUES ($1, $2, $3, $4) RETURNING *',
+      [eventDate, title, story, createdByUserId]
     );
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Error adding event:', error);
-    res.status(500).json({ error: 'Failed to add event' });
+    console.error('Error adding timeline event:', error);
+    res.status(500).json({ error: 'Failed to add timeline event' });
   }
 });
 
-// Update event
-app.put('/api/families/:familyCode/events/:id', async (req, res) => {
-  const { name, date, location, description } = req.body;
+// ============ MEDIA ALBUM ENDPOINTS ============
+// Get all albums
+app.get('/api/albums', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM "Media_Album"');
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching albums:', error);
+    res.status(500).json({ error: 'Failed to fetch albums' });
+  }
+});
+
+// Create album
+app.post('/api/albums', async (req, res) => {
+  const { albumName, description, createdByUserId } = req.body;
   try {
     const result = await pool.query(
-      'UPDATE events SET name = $1, date = $2, location = $3, description = $4 WHERE id = $5 RETURNING *',
-      [name, date, location, description, req.params.id]
+      'INSERT INTO "Media_Album" ("AlbumName", "Description", "CreatedBy_UserID") VALUES ($1, $2, $3) RETURNING *',
+      [albumName, description, createdByUserId]
     );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
     res.json(result.rows[0]);
   } catch (error) {
-    console.error('Error updating event:', error);
-    res.status(500).json({ error: 'Failed to update event' });
+    console.error('Error creating album:', error);
+    res.status(500).json({ error: 'Failed to create album' });
   }
 });
 
-// Delete event
-app.delete('/api/families/:familyCode/events/:id', async (req, res) => {
+// ============ MEDIA ITEM ENDPOINTS ============
+// Get items in album
+app.get('/api/albums/:albumId/items', async (req, res) => {
   try {
-    const result = await pool.query('DELETE FROM events WHERE id = $1 RETURNING *', [req.params.id]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
-    res.json({ success: true });
+    const result = await pool.query(
+      'SELECT * FROM "Media_Item" WHERE "AlbumID" = $1 AND "Post_Status" = $2',
+      [req.params.albumId, 'Visible']
+    );
+    res.json(result.rows);
   } catch (error) {
-    console.error('Error deleting event:', error);
-    res.status(500).json({ error: 'Failed to delete' });
+    console.error('Error fetching media items:', error);
+    res.status(500).json({ error: 'Failed to fetch media items' });
+  }
+});
+
+// Add media item
+app.post('/api/albums/:albumId/items', async (req, res) => {
+  const { uploadedByUserId, fileUrl, descriptionCaption, dateTaken } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO "Media_Item" ("AlbumID", "UploadedBy_UserID", "File_URL", "Description_Caption", "Date_Taken") VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [req.params.albumId, uploadedByUserId, fileUrl, descriptionCaption, dateTaken]
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error adding media item:', error);
+    res.status(500).json({ error: 'Failed to add media item' });
+  }
+});
+
+// ============ MEMORIAL TRIBUTE ENDPOINTS ============
+// Get tributes for a person
+app.get('/api/people/:personId/tributes', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM "Memorial_Tribute" WHERE "Deceased_PersonID" = $1 AND "Post_Status" = $2 ORDER BY "Timestamp" DESC',
+      [req.params.personId, 'Visible']
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching tributes:', error);
+    res.status(500).json({ error: 'Failed to fetch tributes' });
+  }
+});
+
+// Add tribute
+app.post('/api/people/:personId/tributes', async (req, res) => {
+  const { postedByUserId, tributeContent } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO "Memorial_Tribute" ("Deceased_PersonID", "PostedBy_UserID", "Tribute_Content") VALUES ($1, $2, $3) RETURNING *',
+      [req.params.personId, postedByUserId, tributeContent]
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error adding tribute:', error);
+    res.status(500).json({ error: 'Failed to add tribute' });
+  }
+});
+
+// ============ GROUP ENDPOINTS ============
+// Get all groups
+app.get('/api/groups', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM "Group"');
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching groups:', error);
+    res.status(500).json({ error: 'Failed to fetch groups' });
+  }
+});
+
+// Create group
+app.post('/api/groups', async (req, res) => {
+  const { groupName, groupType, createdByUserId } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO "Group" ("GroupName", "GroupType", "CreatedBy_UserID") VALUES ($1, $2, $3) RETURNING *',
+      [groupName, groupType, createdByUserId]
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating group:', error);
+    res.status(500).json({ error: 'Failed to create group' });
   }
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 Family Legacy API running on port ${PORT}`);
+  console.log(`🚀 Project Harmony API running on port ${PORT}`);
   console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
 });
